@@ -12,11 +12,11 @@ model festival
 
 global
 {
-	int numberOfGuests <- 10;
+	int numberOfGuests <- 30;
 	int numberOfSecurity <- 2;
-	int numberOfBadguests <- 2;
-	int numberOfPerformers <- 2;
-	int numberOfJournalists <- 1;
+	int numberOfBadguests <- 10;
+	int numberOfPerformers <- 4;
+	int numberOfJournalists <- 2;
 	int numberOfStages <- 1;
 	int numberOfBars <- 1;
 	int numberOfKiosks <- 1;
@@ -89,6 +89,24 @@ global
 			sleepLocation <- backstageLocation;
 		}
 	}
+	
+
+	int guestHappiness;
+	int totalHappiness;
+	int performerHappiness;
+	int journalistHappiness;
+	int securityHappiness;
+	int badguestHappiness;
+	
+	reflex chartValues when: time mod 5 = 0
+	{
+		guestHappiness <- guest sum_of each.happiness;
+		totalHappiness <- person sum_of each.happiness;
+		performerHappiness <- performer sum_of each.happiness;
+		journalistHappiness <- journalist sum_of each.happiness;
+		securityHappiness <- security sum_of each.happiness;
+		badguestHappiness <- badguest sum_of each.happiness;
+	}
 }
 
 // Parent of agents:
@@ -109,6 +127,7 @@ species person skills: [moving, fipa] control: simple_bdi
 	place targetBar <- nil;
 	place targetKiosk <- nil;
 	point target_point <- {rnd(100),rnd(100)};
+	bool sleeping <- false;
 	
 	
 	// Initialize random needs
@@ -120,7 +139,7 @@ species person skills: [moving, fipa] control: simple_bdi
 		tired <- rnd(0,50);
 		foodLocations <- list(kiosk);
 		drinkLocations <- list(bar);
-		stageLocation <- first(list(stage));
+		stageLocation <- first(list(stage)).location;
 		do add_belief(idle_predicate);
 	}
 	
@@ -129,18 +148,22 @@ species person skills: [moving, fipa] control: simple_bdi
 		if ((time mod 10) = 0){
 		//	write "increase hunger";
 			hunger <- hunger+1;
-			happiness <- happiness -1;
+//			happiness <- happiness -1;
 		}
 		if ((time mod 5) = 0 ){
 		//	write "increase thirst";
 			thirst <- thirst+1;
-			happiness <- happiness -1;	
+//			happiness <- happiness -1;	
 		}
-		if ((time mod 30) = 0) {
+		if ((time mod 30) = 0) and !sleeping {
 		//	write "increase tired";
 			tired <- tired+1;
 			happiness <- happiness -1;
 		}
+	}
+	
+	reflex reduceHappiness when: (hunger > 100 or thirst > 100 or tired > 100) and time mod 10 and !sleeping{
+		happiness <- happiness - 1;
 	}
 	
 	// Draw on map
@@ -261,10 +284,12 @@ species person skills: [moving, fipa] control: simple_bdi
 			if (location distance_to sleepLocation > 3) {
 				do goto target:sleepLocation speed: 3;				
 			} else {
+				sleeping <- true;
 				if ((time mod 10) = 0) {
 					tired <- tired-1;					
 				}
 				if (tired < 1) {
+					sleeping <- false;
 					do remove_belief(sleep_predicate);
 					do remove_intention(sleep, true);
 				}
@@ -276,7 +301,6 @@ species person skills: [moving, fipa] control: simple_bdi
 // Agents:
 species guest parent: person 
 {
-	
 	bool wasPunched <- false;
 	person attacker <- nil;
 	
@@ -297,7 +321,7 @@ species guest parent: person
 				 }	
 				}
 			}
-			if (happiness > 70) {
+			if (happiness > 70 and (thirst < 40 or hunger < 40 or tired < 40)) {
 				do remove_belief(happy_predicate);
 				do remove_intention(becomeHappy, true);
 			}
@@ -316,7 +340,7 @@ species guest parent: person
 	rule belief: has_been_in_fight new_desire: reportBadguest strength:11;
 	plan reportAttacker intention: reportBadguest{
 		write name + " reporting " + attacker + " to security";
-		do start_conversation (to:: list(security), protocol:: 'no-protocol', performative:: 'inform', contents:: ['Attacker', attacker]);
+		do start_conversation (to:: list(security), protocol:: 'no-protocol', performative:: 'inform', contents:: ['Attacker', attacker.name]);
 		attacker <- nil;
 		do remove_belief(has_been_in_fight);
 		do remove_intention(reportBadguest, true);
@@ -331,7 +355,9 @@ species badguest parent: person
 	
 	plan fight intention: becomeHappy{
 		ask guest at_distance 3 {
-			myself.guestToFight <- myself.guestToFight + self;
+			if myself.happiness < self.happiness and flip(0.5){			
+				myself.guestToFight <- myself.guestToFight + self;
+			}
 		}
 		if (guestToFight != nil) {
 			ask one_of(guestToFight){
@@ -353,13 +379,21 @@ species badguest parent: person
 species security parent: person
 {
 	point target_point <- {rnd(0,100),rnd(0,100)};
-	list<person> guestsToArrest;
+	list<string> guestsToArrest;
+	list<string> arrested <- [];
+	list<string> justArrested <- [];
+	
 	perceive target:self{
 		if !empty(informs){
 			loop i over: informs{
-				guestsToArrest <- guestsToArrest + i.contents[1];
+				if (i.contents[0] = "Attacker"){
+					guestsToArrest <- guestsToArrest + i.contents[1];
+					do add_belief(BadguestReported);
+				}
+				if (i.contents[0] = "Arrested"){
+					arrested <- arrested + i.contents[1];
+				}
 			}
-			do add_belief(BadguestReported);
 		}
 	}
 	
@@ -367,18 +401,51 @@ species security parent: person
 	predicate arrestBadguest <- new_predicate("Arrest badguest", false);
 	
 	rule belief: BadguestReported new_desire: arrestBadguest strength:7.0;
-	
+	reflex when: empty(guestsToArrest){
+		if (hunger < 50 and thirst < 50 and tired < 50 and time mod 30){
+			happiness <- happiness +1;
+		}
+	}
 	plan findBadguest intention: arrestBadguest{
+		
 		ask badguest at_distance 9 {
-			write myself.name + " asking " + self.name;
-			if (myself.guestsToArrest contains self){
-				remove all: self from: myself.guestsToArrest; 
+//			write myself.name + " asking " + self.name;
+			if (myself.guestsToArrest contains self.name){
+				//remove all: self from: myself.guestsToArrest; 
 				write myself.name + " arrested " + self.name;
+				myself.justArrested <- myself.justArrested + self.name;
 				do die;
 			}
 		}
+		// Inform other security that bad guy has been arrested
+		if(!empty(justArrested)) {
+			loop a over: justArrested{
+				write name + " informing that I arrested " + a;
+				do start_conversation (to:: list(security), protocol:: 'no-protocol', performative:: 'inform', contents:: ['Arrested',a]);
+			}
+		}
+		
+		// Check messages from other security
+//		if(!empty(informs)){
+//			loop i over: informs {
+//				if (i.contents[0] = "Arrested"){
+//					arrested <- arrested + i.contents[1];
+//				}
+//				if (i.contents[0] = "Attacker"){
+//					guestsToArrest <- guestsToArrest + i.contents[1];
+//				}
+//			}
+//		}
+		arrested <- arrested + justArrested;
+		loop a over: arrested{
+			if (guestsToArrest contains a) {
+				remove all: a from: guestsToArrest;
+			}
+		}
+		justArrested <- [];
 		if empty(guestsToArrest) {
 			write "arrested all badguys";
+			happiness <- happiness + 40;
 			do remove_belief(BadguestReported);
 			do remove_intention(arrestBadguest, true);
 		} else {
@@ -427,7 +494,7 @@ species performer parent: person
 				else
 				{
 					if(time mod 3=0 and !empty(list(guest at_distance 9))){
-						do start_conversation (to:: list(guest at_distance 9 ), protocol:: 'no-protocol', performative:: 'inform', contents:: ['Music',time]);
+						do start_conversation (to:: list(guest at_distance 9 )+list(journalist at_distance 9), protocol:: 'no-protocol', performative:: 'inform', contents:: ['Music',time]);
 						
 					}
 				}
@@ -447,11 +514,19 @@ species journalist parent: person
 			do goto target:stageLocation speed: 3;
 		}
 		else {
+			if(hunger > 80 or thirst > 80 or tired > 80){
+				do remove_belief(happy_predicate);
+				do remove_intention(becomeHappy, true);
+			}
 			loop i over:informs	
 			{
 				if(i.contents[0]='Done' and time-int(i.contents[1])<2)
 				{
 					performer_interview<-i.sender;
+				}
+				if(i.contents[0]='Music' and time-int(i.contents[1])<2)
+				{
+					happiness <- happiness + 5;
 				}
 			}
 			if(performer_interview!=nil){			
@@ -559,6 +634,16 @@ experiment main type: gui
 			species tent;
 			species backstage;
 			species camping;
+		}
+		display chart refresh:every(5#cycles) {		
+			chart "Happiness" type: series {
+			//	data "totalHappiness" value: totalHappiness;
+				data "guestHappiness" value: guestHappiness;
+				data "performerHappiness" value: performerHappiness;
+				data "journalistHappiness" value: journalistHappiness;
+				data "securityHappiness" value: securityHappiness;
+				data "badguestHappiness" value: badguestHappiness;
+			}
 		}
 	}
 }
