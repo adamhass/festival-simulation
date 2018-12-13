@@ -145,7 +145,7 @@ species person skills: [moving, fipa] control: simple_bdi
 	
 	// Draw on map
 	aspect default{
-		draw sphere(1) color: headColor at:{location.x,location.y,3};
+		draw sphere(1) color: headColor at:{location.x,location.y,location.z+3};
 		draw cube(3) color: bodyColor;
 	}
 	
@@ -286,6 +286,17 @@ species guest parent: person
 		} else {
 			do wander;
 			happiness <- happiness+1;
+			if(!empty(informs)){
+				loop i over:informs{
+				 if (i.contents[0]='Music') and (int(i.contents[1])-time> -2) {
+				 	happiness<-happiness+1;
+				 	if(happiness>30){
+				 	do start_conversation (to:: i.sender, protocol:: 'no-protocol', performative:: 'inform', contents:: ['Applause']); 	
+				 	//write name + "i am applauding";
+				 	}
+				 }	
+				}
+			}
 			if (happiness > 70) {
 				do remove_belief(happy_predicate);
 				do remove_intention(becomeHappy, true);
@@ -310,6 +321,8 @@ species guest parent: person
 		do remove_belief(has_been_in_fight);
 		do remove_intention(reportBadguest, true);
 	}
+	
+	
 }
 
 species badguest parent: person
@@ -381,12 +394,94 @@ species security parent: person
 
 species performer parent: person
 {
-	
+		float performer_start<-0;
+		
+		plan goPerform intention: becomeHappy{
+			if (location distance_to stageLocation > 6) {
+				do goto target:stageLocation speed: 3;
+			} 
+			else
+			{
+				if (performer_start=0)
+				{
+					performer_start<-time;
+					write "starting performance " + time ; 
+				}
+				location<-{stageLocation.x,stageLocation.y,5};
+			//	write "perofmer at stage";
+			 
+				loop k over:informs{
+					if(k.contents[0]='Applause')
+					{
+						happiness<-happiness+1;
+					}
+				}
+				if(performer_start+120=time)
+				{
+					do start_conversation (to:: list(journalist), protocol:: 'no-protocol', performative:: 'inform', contents:: ['Done',time]);
+					write "performer is DONE: " + time;
+					performer_start<-0;
+					do remove_belief(happy_predicate);
+					do remove_intention(becomeHappy, true);
+				}
+				else
+				{
+					if(time mod 3=0 and !empty(list(guest at_distance 9))){
+						do start_conversation (to:: list(guest at_distance 9 ), protocol:: 'no-protocol', performative:: 'inform', contents:: ['Music',time]);
+						
+					}
+				}
+			}
+		}
+		
 }
 
 species journalist parent: person
 {
+	performer performer_interview<-nil;
+	point performer_location<-nil;
+	int number_of_questions<-5;
 	
+	plan goInterview intention: becomeHappy{
+		if (location distance_to stageLocation > 6 and performer_interview =nil) {
+			do goto target:stageLocation speed: 3;
+		}
+		else {
+			loop i over:informs	
+			{
+				if(i.contents[0]='Done' and time-int(i.contents[1])<2)
+				{
+					performer_interview<-i.sender;
+				}
+			}
+			if(performer_interview!=nil){			
+				ask performer_interview
+				{
+					myself.performer_location<-self.location;					
+				}
+					
+					do goto target:performer_location speed:3;
+					if number_of_questions>0{
+						write "Asking question: " + time + " " + number_of_questions;
+						ask performer_interview  {
+							
+							myself.number_of_questions<- myself.number_of_questions-1;
+							myself.happiness<-myself.happiness+10;
+						}
+					}
+					else {
+						performer_interview<-nil;
+						performer_location<-nil;
+						number_of_questions<-5;
+						write 	"i manage to ask 5 questions";			
+						do remove_belief(happy_predicate);
+						do remove_intention(becomeHappy, true);
+						
+					}
+			}
+		}
+			
+		}
 }
 
 // Parent of locations: 
